@@ -3,6 +3,8 @@ services:
     image: ${GATEWAY_IMAGE:-google-workspace-gateway:local}
     restart: unless-stopped
     init: true
+    group_add:
+      - "${SECRETS_GID:-1000}"
     environment:
       OAUTH_REDIRECT_URL: ${OAUTH_REDIRECT_URL:?Ustaw OAUTH_REDIRECT_URL}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Ustaw GOOGLE_CLIENT_ID}

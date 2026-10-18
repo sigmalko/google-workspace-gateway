@@ -38,6 +38,25 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: git diff --check
+      - name: Sprawdź dostęp do plików sekretów przez grupę
+        env:
+          OAUTH_REDIRECT_URL: https://example.org/oauth/google/callback
+          GOOGLE_CLIENT_ID: example.apps.googleusercontent.com
+          ALLOWED_EMAILS: test@example.org
+          GATEWAY_IMAGE: node:24-bookworm-slim
+        run: |
+          set -euo pipefail
+          mkdir -m 700 secrets
+          for file in encryption_key google_client_secret agent_token; do
+            printf 'test' > "secrets/$file"
+            chmod 640 "secrets/$file"
+          done
+          export SECRETS_GID="$(id -g)"
+          docker compose run --rm --no-deps --user 1000:1000 --entrypoint sh gateway -c '
+            for file in encryption_key google_client_secret agent_token; do
+              test -r "/run/secrets/$file" || exit 1
+            done
+          '
 
   publish:
     needs: test
