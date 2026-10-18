@@ -33,12 +33,12 @@ Google kieruje przeglądarkę na skonfigurowany `OAUTH_REDIRECT_URL`, np. `https
 
 ## Instalacja i uruchomienie
 
-Pobierz `docker-compose.yml` i `env.example` z tego samego [GitHub Release](https://github.com/sigmalko/google-workspace-gateway/releases). Poniższy przykład instaluje wersję `v0.1.4`; aby wybrać inną wersję, zmień `RELEASE`. Nie trzeba klonować repozytorium ani budować obrazu.
+Pobierz `docker-compose.yml` i `env.example` z tego samego [GitHub Release](https://github.com/sigmalko/google-workspace-gateway/releases). Poniższy przykład instaluje wersję `v0.1.5`; aby wybrać inną wersję, zmień `RELEASE`. Nie trzeba klonować repozytorium ani budować obrazu.
 
 ```sh
 mkdir -p google-workspace-gateway
 cd google-workspace-gateway
-RELEASE=v0.1.4
+RELEASE=v0.1.5
 RELEASE_URL="https://github.com/sigmalko/google-workspace-gateway/releases/download/${RELEASE}"
 curl -fL "$RELEASE_URL/docker-compose.yml" -o docker-compose.yml
 curl -fL "$RELEASE_URL/env.example" -o .env.example
@@ -53,7 +53,7 @@ Edytuj `.env`. Każdy parametr jest również opisany w komentarzach pliku, wraz
 - `GATEWAY_IMAGE` — adres obrazu GHCR przypiętego do wybranego wydania; wartość jest przygotowana w pobranym `env.example`.
 - `GOOGLE_CLIENT_ID` — Client ID z Google Cloud.
 - `ALLOWED_EMAILS` — dozwolone adresy e-mail oddzielone przecinkami, np. `ALLOWED_EMAILS=anna@example.com,jan@example.com`. Spacje wokół adresów są usuwane, a wielkość liter nie ma znaczenia. Konta muszą też spełniać ustawienia Audience/Test users.
-- `SECRETS_GID` — numeryczny GID grupy plików sekretów na hoście, której Docker doda proces gatewaya jako grupę dodatkową; domyślnie `1000`. Ustal go po utworzeniu plików, jak opisano poniżej.
+- `SECRETS_GID` — numeryczny GID dodatkowej grupy procesu gatewaya wewnątrz kontenera; domyślnie `1000`. Ustal go po utworzeniu plików według rozdziału [Jak wybrać GID dla sekretów](#jak-wybrać-gid-dla-sekretów).
 - `BIND_ADDRESS` i `GATEWAY_PORT` — adres interfejsu hosta i port hosta, na którym ma być dostępne HTTP. Domyślnie `127.0.0.1:8765`, czyli dostęp tylko z tego VPS. `PORT=8765` wewnątrz kontenera jest stały.
 - `LOG_FILE` — ścieżka pliku logu wewnątrz kontenera (domyślnie `/data/gateway.log`). `LOG_MAX_BYTES` — maksymalny rozmiar pliku przed rotacją, domyślnie 10485760 bajtów; dopuszczalne są wartości od 1024 do 1073741824.
 
@@ -76,7 +76,7 @@ Przy zwykłym Dockerze bez mapowania użytkowników możesz udostępnić sekrety
 
 Gateway nadal działa jako użytkownik `1000:1000`, a `group_add` dodaje mu podaną grupę. Każdy proces należący do tej grupy, który ma dostęp do plików, może je odczytać, więc wybierz zaufaną grupę i nie udostępniaj sekretów innym użytkownikom. Agent Cracow również potrzebuje odczytu `agent_token`, który jest osobnym sekretem dla agenta, a nie tokenem Google. Jeśli pliki są już czytelne dla UID `1000` (np. należą do tego użytkownika i mają `0600`), nie trzeba zmieniać ich na `0640`.
 
-W rootless Dockerze lub przy `userns-remap` identyfikatory w kontenerze są mapowane na inne identyfikatory hosta: `SECRETS_GID` musi być GID **wewnątrz kontenera**, odpowiadającym grupie plików hosta. Zobacz [mapowanie UID/GID Dockera](https://docs.docker.com/engine/security/rootless/uid-gid-mapping/); dopasuj mapowanie i uprawnienia do swojej konfiguracji.
+W rootless Dockerze lub przy `userns-remap` identyfikatory są mapowane; postępuj według rozdziału [Jak wybrać GID dla sekretów](#jak-wybrać-gid-dla-sekretów).
 
 Pobierz przypięty obraz i uruchom aplikację:
 
@@ -95,6 +95,53 @@ W swoim reverse proxy skonfiguruj trasę publicznego callbacku i panelu do portu
 Otwórz w przeglądarce publiczny adres panelu, np. `https://calendar.example.org/google-workspace/`. Zaloguj się, połącz Calendar i/lub Tasks, zaakceptuj zakresy oraz wybierz cel. Dostęp do panelu ma tylko konto Google z `ALLOWED_EMAILS`.
 
 Baza SQLite jest przechowywana w wolumenie Dockera `gateway_data`. Refresh tokeny są szyfrowane kluczem z `secrets/encryption_key`; rób bezpieczne kopie bazy i tego klucza razem. Utrata klucza uniemożliwi odczyt tokenów. Jedna instancja aplikacji powinna używać jednej bazy; odświeżanie tokenów nie jest synchronizowane pomiędzy replikami.
+
+## Jak wybrać GID dla sekretów
+
+GID to numeryczny identyfikator grupy w systemie Linux; UID identyfikuje użytkownika. Wartości zależą od konkretnego VPS i konfiguracji Dockera. `SECRETS_GID` wskazuje dodatkową grupę procesu gatewaya **wewnątrz kontenera**. Compose używa jej w `group_add`; nie zmienia ona właściciela ani uprawnień plików.
+
+### Zwykły Docker bez mapowania użytkowników
+
+1. W katalogu instalacji sprawdź numeryczne identyfikatory i uprawnienia wszystkich plików sekretów:
+
+   ```sh
+   id
+   stat -c '%n: UID=%u GID=%g uprawnienia=%a' \
+     secrets/encryption_key secrets/google_client_secret secrets/agent_token
+   docker info --format '{{json .SecurityOptions}}'
+   ```
+
+   `id` pokazuje Twoje UID i grupy, a `stat` — właściciela, grupę i uprawnienia każdego pliku. Wybierz **GID plików**, niekoniecznie Twoje UID ani podstawowy GID z `id`: pliki mogą należeć do innej grupy. Jeśli w opcjach bezpieczeństwa jest `rootless` lub `userns`, przeczytaj sekcję o mapowaniu poniżej.
+2. Dla przykładowego wyniku `UID=1002 GID=1002 uprawnienia=600` na każdym pliku ustaw w `.env` `SECRETS_GID=1002`. Na innym VPS, gdy grupą wszystkich plików jest np. `2000`, wpisz `SECRETS_GID=2000`. `1000` w szablonie jest tylko wartością domyślną, nie uniwersalną.
+3. Wszystkie trzy pliki powinny mieć ten sam GID. Jeśli tak nie jest, właściciel może przypisać im wspólną zaufaną grupę, do której należy, np. `chgrp 2000 secrets/encryption_key secrets/google_client_secret secrets/agent_token`. Bez odpowiednich uprawnień poproś administratora o pomoc. Nigdy nie zmieniaj zawartości `encryption_key` tylko po to, by naprawić dostęp.
+4. Jeżeli gateway ma odczytywać pliki przez grupę, ich właściciel może wykonać:
+
+   ```sh
+   chmod 640 secrets/encryption_key secrets/google_client_secret secrets/agent_token
+   ```
+
+   Tryb `640` daje właścicielowi odczyt i zapis, grupie odczyt, a innym nie daje dostępu. Przy plikach należących do UID `1000` kontenera może wystarczyć `600`. Wybierz grupę, której ufasz: wszystkie procesy z tej grupy, mogące dotrzeć do plików, uzyskają prawo odczytu. Katalog `secrets` powinien pozostać ograniczony, np. `700`.
+5. Po zmianie `.env` odtwórz kontener przez `docker compose up -d` i sprawdź `docker compose logs --tail=30 gateway`. Przy problemach z dostępem poniższe polecenie pokazuje identyfikatory i sprawdza odczyt bez wypisywania wartości sekretów:
+
+   ```sh
+   docker compose run --rm --no-deps --entrypoint /bin/sh gateway -c '
+     id
+     ls -ln /run/secrets/
+     for plik in encryption_key google_client_secret agent_token; do
+       if [ -r "/run/secrets/$plik" ]; then
+         echo "$plik: czytelny"
+       else
+         echo "$plik: brak dostępu"
+       fi
+     done
+   '
+   ```
+
+### Rootless Docker i `userns-remap`
+
+W tych trybach identyfikatory hosta i kontenera mogą się różnić. `stat` na hoście pokazuje GID hosta, natomiast `ls -ln /run/secrets/` w powyższym poleceniu pokazuje GID widziany w kontenerze. `SECRETS_GID` jest numerem **z perspektywy kontenera**, a nie automatycznie numerem z hosta. Sposób mapowania różni się między rootless a `userns-remap`; zobacz [dokumentację Dockera o mapowaniu UID/GID](https://docs.docker.com/engine/security/rootless/uid-gid-mapping/).
+
+Sprawdź, czy grupa plików jest odwzorowana w kontenerze i czy dostęp przez nią jest odpowiednio ograniczony. Następnie ustaw odpowiedni GID w `.env` i powtórz test odczytu. Jeśli grupa nie jest odwzorowana, wynik wskazuje grupę uprzywilejowaną albo nie masz możliwości zmiany uprawnień, uzgodnij konfigurację z administratorem; samo wpisanie GID hosta może nie wystarczyć. Mapowanie może także wpływać na dostęp do wolumenu `/data`.
 
 ## Log aplikacji
 
