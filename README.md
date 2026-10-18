@@ -43,7 +43,7 @@ Edytuj `.env`:
 
 - `OAUTH_REDIRECT_URL` — pełny, publiczny callback HTTPS z dokładną ścieżką, którą zarejestrujesz w Google. Prefiks może być dowolny, np. `/google-workspace`; sama aplikacja wymaga końcówki `/oauth/google/callback`.
 - `GOOGLE_CLIENT_ID` — Client ID z Google Cloud.
-- `ALLOWED_EMAILS` — dozwolone adresy e-mail oddzielone przecinkami. Konta muszą też spełniać ustawienia Audience/Test users.
+- `ALLOWED_EMAILS` — dozwolone adresy e-mail oddzielone przecinkami, np. `ALLOWED_EMAILS=anna@example.com,jan@example.com`. Spacje wokół adresów są usuwane, a wielkość liter nie ma znaczenia. Konta muszą też spełniać ustawienia Audience/Test users.
 - `BIND_ADDRESS` i `GATEWAY_PORT` — adres interfejsu hosta i port hosta, na którym ma być dostępne HTTP. Domyślnie `127.0.0.1:8765`, czyli dostęp tylko z tego VPS. `PORT=8765` wewnątrz kontenera jest stały.
 
 Utwórz sekrety poza repozytorium. Nie wpisuj ich w poleceniach powłoki, repozytorium ani logach:
