@@ -6,7 +6,7 @@ export const SCOPES = {
 };
 export class Google {
   constructor(config, store) { this.config = config; this.store = store; this.refreshing = new Map(); }
-  client() { return new OAuth2Client(this.config.clientId, this.config.clientSecret, `${this.config.baseUrl}/oauth/google/callback`); }
+  client() { return new OAuth2Client(this.config.clientId, this.config.clientSecret, this.config.redirectUrl); }
   async authorize(store, session, purpose) {
     const client = this.client();
     const { codeVerifier, codeChallenge } = await client.generateCodeVerifierAsync();

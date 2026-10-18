@@ -33,14 +33,15 @@ function page(title, body) {
   return `<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title><style>body{font:16px system-ui,sans-serif;max-width:760px;margin:3rem auto;padding:0 1rem;line-height:1.55;color:#172033}h1{font-size:1.8rem}section{border:1px solid #d8dfe8;border-radius:10px;padding:1rem;margin:1rem 0}button,select{font:inherit;padding:.55rem;margin:.25rem}button{cursor:pointer}small{color:#4b5563}form{margin:.5rem 0}.error{color:#9d2020}</style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
 }
 function form(action, csrf, content) { return `<form method="post" action="${esc(action)}"><input type="hidden" name="csrf" value="${esc(csrf)}">${content}</form>`; }
+function path(config, value) { return `${config.mountPath || ''}${value === '/' ? '/' : value}`; }
 function setCookie(res, config, value) {
-  res.setHeader('Set-Cookie', `gateway_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${config.baseUrl.startsWith('https:') ? '; Secure' : ''}`);
+  res.setHeader('Set-Cookie', `gateway_session=${value}; Path=${config.mountPath ? `${config.mountPath}/` : '/'}; HttpOnly; SameSite=Lax; Max-Age=86400${config.secureCookies ? '; Secure' : ''}`);
 }
 function csrf(req, res, next) {
   if (!req.session || !eq(req.body?.csrf, req.session.csrf)) return res.status(403).send(page('Błąd', '<p>Nieprawidłowa sesja formularza.</p>'));
   next();
 }
-function isLogged(req, res, next) { if (!req.session?.user_id) return res.redirect('/'); next(); }
+function isLogged(config) { return (req, res, next) => { if (!req.session?.user_id) return res.redirect(path(config, '/')); next(); }; }
 function serviceAuth(config) {
   return (req, res, next) => {
     const auth = req.get('authorization') || '';
@@ -51,6 +52,12 @@ function serviceAuth(config) {
 export function createApp({ config, store, google }) {
   const app = express();
   app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    if (config.mountPath && (req.path === config.mountPath || req.path.startsWith(`${config.mountPath}/`))) {
+      req.url = req.url.slice(config.mountPath.length) || '/';
+    }
+    next();
+  });
   app.use((req, res, next) => {
     res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'" });
     next();
@@ -76,7 +83,7 @@ export function createApp({ config, store, google }) {
   app.get('/healthz', (req, res) => res.json({ status: 'ok' }));
   app.get('/', async (req, res) => {
     const user = req.session.user_id && store.user(req.session.user_id);
-    if (!user) return res.send(page('Google Workspace Gateway', '<p>Połącz kalendarz lub listę zadań z monitorem wydarzeń.</p><p><a href="/login">Zaloguj się przez Google</a></p>'));
+    if (!user) return res.send(page('Google Workspace Gateway', `<p>Połącz kalendarz lub listę zadań z monitorem wydarzeń.</p><p><a href="${path(config, '/login')}">Zaloguj się przez Google</a></p>`));
     const active = store.subscriptions(user.id);
     const scopes = JSON.parse(user.scopes);
     const last = store.db.prepare("SELECT MAX(p.completed_at) AS time FROM publications p JOIN subscriptions s ON s.id=p.subscription_id WHERE s.user_id=? AND p.status='created'").get(user.id).time;
@@ -87,24 +94,24 @@ export function createApp({ config, store, google }) {
       const label = kind === 'calendar' ? 'Google Calendar' : 'Google Tasks';
       const subscription = active.find(s => s.kind === kind);
       content += `<section><h2>${label}</h2><p>${subscription ? `Cel: ${esc(subscription.target_name)}. Publikacja włączona.` : 'Cel nie jest wybrany.'}</p>`;
-      content += form(`/connect/${kind}`, req.session.csrf, `<button>Połącz lub przyznaj uprawnienia</button>`);
-      if (user.status === 'connected' && SCOPES[kind].every(s => scopes.includes(s))) content += `<p><a href="/targets/${kind}">Wybierz cel</a></p>`;
-      if (subscription) content += form(`/disable/${kind}`, req.session.csrf, '<button>Wyłącz publikację</button>');
+      content += form(path(config, `/connect/${kind}`), req.session.csrf, `<button>Połącz lub przyznaj uprawnienia</button>`);
+      if (user.status === 'connected' && SCOPES[kind].every(s => scopes.includes(s))) content += `<p><a href="${path(config, `/targets/${kind}`)}">Wybierz cel</a></p>`;
+      if (subscription) content += form(path(config, `/disable/${kind}`), req.session.csrf, '<button>Wyłącz publikację</button>');
       content += '</section>';
     }
     content += `<p><small>Dostęp OAuth może obejmować więcej kalendarzy i zadań niż wybrany cel. Przed przyznaniem zgody zapoznaj się z zakresem uprawnień w Google.</small></p>`;
-    content += form('/disconnect', req.session.csrf, '<button>Odłącz Google lokalnie</button>') + '<p><small>Aby cofnąć zgodę w Google, użyj <a href="https://myaccount.google.com/permissions">ustawień konta Google</a>. Lokalne odłączenie nie usuwa zdarzeń ani nie cofa zgody w Google.</small></p>';
-    content += form('/logout', req.session.csrf, '<button>Wyloguj</button>');
+    content += form(path(config, '/disconnect'), req.session.csrf, '<button>Odłącz Google lokalnie</button>') + '<p><small>Aby cofnąć zgodę w Google, użyj <a href="https://myaccount.google.com/permissions">ustawień konta Google</a>. Lokalne odłączenie nie usuwa zdarzeń ani nie cofa zgody w Google.</small></p>';
+    content += form(path(config, '/logout'), req.session.csrf, '<button>Wyloguj</button>');
     return res.send(page('Ustawienia połączenia', content));
   });
   app.get('/login', async (req, res) => res.redirect(await google.authorize(store, req.session, 'login')));
-  app.post('/connect/:kind', isLogged, csrf, async (req, res) => {
+  app.post('/connect/:kind', isLogged(config), csrf, async (req, res) => {
     if (!['calendar', 'tasks'].includes(req.params.kind)) return res.sendStatus(404);
     res.redirect(await google.authorize(store, req.session, req.params.kind));
   });
   app.get('/oauth/google/callback', async (req, res) => {
     const state = typeof req.query.state === 'string' && store.consumeState(req.query.state, req.session);
-    if (!state || typeof req.query.code !== 'string' || req.query.error) return res.status(400).send(page('Nie udało się połączyć', '<p>Sesja wygasła, zgoda została odrzucona lub odpowiedź jest nieprawidłowa.</p><a href="/">Wróć</a>'));
+    if (!state || typeof req.query.code !== 'string' || req.query.error) return res.status(400).send(page('Nie udało się połączyć', `<p>Sesja wygasła, zgoda została odrzucona lub odpowiedź jest nieprawidłowa.</p><a href="${path(config, '/')}">Wróć</a>`));
     try {
       const result = await google.exchange(req.query.code, state);
       const email = result.identity.email.toLowerCase();
@@ -113,30 +120,30 @@ export function createApp({ config, store, google }) {
         const user = store.login(result.identity.sub, email);
         const session = store.rotateSession(req.session, user.id);
         setCookie(res, config, session.raw);
-        return res.redirect('/');
+        return res.redirect(path(config, '/'));
       }
       const user = store.user(req.session.user_id);
-      if (!user || user.sub !== result.identity.sub || !SCOPES[state.purpose]?.every(s => result.scopes.includes(s))) return res.status(403).send(page('Brak dostępu', '<p>Wybrano inne konto lub nie przyznano wszystkich wymaganych uprawnień.</p><a href="/">Wróć</a>'));
+      if (!user || user.sub !== result.identity.sub || !SCOPES[state.purpose]?.every(s => result.scopes.includes(s))) return res.status(403).send(page('Brak dostępu', `<p>Wybrano inne konto lub nie przyznano wszystkich wymaganych uprawnień.</p><a href="${path(config, '/')}">Wróć</a>`));
       const previous = user.credentials && store.decrypt(user.credentials);
       const refresh = result.tokens.refresh_token || previous?.refresh_token;
-      if (!refresh) return res.status(400).send(page('Brak dostępu offline', '<p>Nie otrzymano refresh tokenu. Spróbuj ponownie udzielić zgody.</p><a href="/">Wróć</a>'));
+      if (!refresh) return res.status(400).send(page('Brak dostępu offline', `<p>Nie otrzymano refresh tokenu. Spróbuj ponownie udzielić zgody.</p><a href="${path(config, '/')}">Wróć</a>`));
       store.saveCredentials(user.id, { refresh_token: refresh, access_token: result.tokens.access_token, expiry_date: result.tokens.expiry_date }, result.scopes);
-      res.redirect(`/targets/${state.purpose}`);
-    } catch { res.status(400).send(page('Nie udało się połączyć', '<p>Nie można zweryfikować odpowiedzi Google. Rozpocznij ponownie.</p><a href="/">Wróć</a>')); }
+      res.redirect(path(config, `/targets/${state.purpose}`));
+    } catch { res.status(400).send(page('Nie udało się połączyć', `<p>Nie można zweryfikować odpowiedzi Google. Rozpocznij ponownie.</p><a href="${path(config, '/')}">Wróć</a>`)); }
   });
-  app.get('/targets/:kind', isLogged, async (req, res) => {
+  app.get('/targets/:kind', isLogged(config), async (req, res) => {
     const kind = req.params.kind;
     if (!['calendar', 'tasks'].includes(kind)) return res.sendStatus(404);
     const user = store.user(req.session.user_id);
-    if (user.status !== 'connected' || !SCOPES[kind].every(s => JSON.parse(user.scopes).includes(s))) return res.status(403).send(page('Brak uprawnień', '<a href="/">Wróć</a>'));
+    if (user.status !== 'connected' || !SCOPES[kind].every(s => JSON.parse(user.scopes).includes(s))) return res.status(403).send(page('Brak uprawnień', `<a href="${path(config, '/')}">Wróć</a>`));
     try {
       const targets = await google.targets(user, kind);
-      if (!targets.length) return res.send(page('Wybór celu', '<p>Nie znaleziono dostępnych celów.</p><a href="/">Wróć</a>'));
+      if (!targets.length) return res.send(page('Wybór celu', `<p>Nie znaleziono dostępnych celów.</p><a href="${path(config, '/')}">Wróć</a>`));
       const options = targets.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
-      res.send(page('Wybór celu', form(`/targets/${kind}`, req.session.csrf, `<label>Cel <select name="target">${options}</select></label><button>Zapisz i włącz</button>`) + '<a href="/">Wróć</a>'));
-    } catch { res.status(503).send(page('Błąd Google', '<p>Nie można pobrać listy. Sprawdź połączenie lub połącz konto ponownie.</p><a href="/">Wróć</a>')); }
+      res.send(page('Wybór celu', form(path(config, `/targets/${kind}`), req.session.csrf, `<label>Cel <select name="target">${options}</select></label><button>Zapisz i włącz</button>`) + `<a href="${path(config, '/')}">Wróć</a>`));
+    } catch { res.status(503).send(page('Błąd Google', `<p>Nie można pobrać listy. Sprawdź połączenie lub połącz konto ponownie.</p><a href="${path(config, '/')}">Wróć</a>`)); }
   });
-  app.post('/targets/:kind', isLogged, csrf, async (req, res) => {
+  app.post('/targets/:kind', isLogged(config), csrf, async (req, res) => {
     const kind = req.params.kind;
     if (!['calendar', 'tasks'].includes(kind) || !text(req.body.target, 2048)) return res.sendStatus(400);
     const user = store.user(req.session.user_id);
@@ -145,12 +152,12 @@ export function createApp({ config, store, google }) {
       const target = (await google.targets(user, kind)).find(t => t.id === req.body.target);
       if (!target) return res.sendStatus(403);
       store.setTarget(user.id, kind, target.id, target.name);
-      res.redirect('/');
-    } catch { res.status(503).send(page('Błąd Google', '<a href="/">Wróć</a>')); }
+      res.redirect(path(config, '/'));
+    } catch { res.status(503).send(page('Błąd Google', `<a href="${path(config, '/')}">Wróć</a>`)); }
   });
-  app.post('/disable/:kind', isLogged, csrf, (req, res) => { if (!['calendar', 'tasks'].includes(req.params.kind)) return res.sendStatus(404); store.disableTarget(req.session.user_id, req.params.kind); res.redirect('/'); });
-  app.post('/disconnect', isLogged, csrf, (req, res) => { store.disconnect(req.session.user_id); res.redirect('/'); });
-  app.post('/logout', csrf, (req, res) => { store.db.prepare('DELETE FROM sessions WHERE id=?').run(req.session.id); setCookie(res, config, ''); res.redirect('/'); });
+  app.post('/disable/:kind', isLogged(config), csrf, (req, res) => { if (!['calendar', 'tasks'].includes(req.params.kind)) return res.sendStatus(404); store.disableTarget(req.session.user_id, req.params.kind); res.redirect(path(config, '/')); });
+  app.post('/disconnect', isLogged(config), csrf, (req, res) => { store.disconnect(req.session.user_id); res.redirect(path(config, '/')); });
+  app.post('/logout', csrf, (req, res) => { store.db.prepare('DELETE FROM sessions WHERE id=?').run(req.session.id); setCookie(res, config, ''); res.redirect(path(config, '/')); });
   app.use('/internal/v1', serviceAuth(config));
   app.get('/internal/v1/subscriptions', (req, res) => res.json({ subscriptions: store.activeSubscriptions(config.allowed) }));
   app.post('/internal/v1/publications', async (req, res) => {

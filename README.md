@@ -1,95 +1,131 @@
 # Google Workspace Gateway
 
-Aplikacja webowa pośredniczy pomiędzy agentem a Google Calendar i Google Tasks. Wielu użytkowników może zalogować się kontem Google, udzielić zgody, wybrać własny kalendarz lub listę zadań i włączyć publikację. OAuth, przechowywanie tokenów i wywołania Google API obsługuje gateway; agent korzysta z osobnego wewnętrznego REST API.
+Aplikacja pośredniczy między zaufanym agentem a Google Calendar i Google Tasks. Użytkownik loguje się przez Google, wybiera własny kalendarz lub listę zadań, a agent komunikuje się z gatewayem przez wewnętrzne REST API. Gateway obsługuje OAuth, bezpieczne przechowywanie refresh tokenów i wywołania Google API.
 
-Projekt powstał dla [monitora występów Kraków](https://github.com/sigmalko/Cracow). Klient monitora w repozytorium Cracow obsługuje to API po skonfigurowaniu trybu `google`. Ta wersja jest punktem wyjścia do uruchomienia i testów; nie została przetestowana z prawdziwym kontem Google ani jako obraz Docker w środowisku autora zmian.
+Projekt powstał dla monitora [Cracow](https://github.com/sigmalko/Cracow). Ten gateway nie publikuje wydarzeń samodzielnie ani nie weryfikuje ich źródeł. Agent ma wysyłać wyłącznie zweryfikowane dane.
 
-## Jak to działa
+## Interfejs webowy i przekierowanie OAuth
 
-1. Użytkownik loguje się do aplikacji przez OpenID Connect. Dostęp mają tylko adresy wpisane w `ALLOWED_EMAILS` i potwierdzone przez Google.
-2. Osobno zgadza się na dostęp Calendar i/lub Tasks. Publiczny HTTPS callback odbiera kod autoryzacyjny; aplikacja sprawdza `state`, PKCE, tożsamość i zakresy, a następnie wymienia kod na tokeny.
-3. Użytkownik wybiera po jednym celu dla każdego typu. Jawne wybranie celu włącza publikację dla monitora; można ją wyłączyć, zmienić cel lub lokalnie odłączyć Google.
-4. Aplikacja przechowuje refresh token w zaszyfrowanej bazie SQLite; na żądanie automatycznie odświeża access token. Gdy potrzebna jest ponowna zgoda, stan konta zmienia się na `reauthorization_required`.
-5. Uprawniony proces monitora wyświetla aktywne subskrypcje i wysyła zweryfikowane dane do API. Nie otrzymuje tokenów Google. Klasyfikator modelowy nie powinien mieć dostępu do sekretu API ani wywoływać publikacji.
+Aplikacja ma prosty panel HTML do logowania i zarządzania połączeniami. Otwarcie strony głównej (`https://twoja-domena/twoja-sciezka/`) **nie** przekierowuje automatycznie do Google: pokazuje przycisk „Zaloguj się przez Google”. Dopiero jego kliknięcie rozpoczyna OAuth. Po zalogowaniu użytkownik może osobno przyznać zakresy Calendar i Tasks, wybrać kalendarz/listę, wyłączyć publikację lub lokalnie odłączyć konto. Panel nie jest API dla agenta.
 
-Wysyłający odpowiada za weryfikację prawdziwości i pochodzenia danych. Gateway sprawdza format, ale nie sprawdza stron wydarzeń ani nie stwierdza, czy wydarzenie odbywa się w Krakowie. Google Calendar wymaga początku i końca wydarzenia. W Tasks API termin zawiera tylko datę; godzina trafia do notatki. [Dokumentacja pola `due`](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks).
+Google kieruje przeglądarkę na skonfigurowany `OAUTH_REDIRECT_URL`, np. `https://calendar.example.org/google-workspace/oauth/google/callback`. Zewnętrzny reverse proxy/gateway użytkownika musi skierować ten publiczny URL do serwisu HTTP tej aplikacji. Może przekazać ścieżkę bez zmian albo usunąć z niej prefiks przed przekazaniem; aplikacja obsługuje oba warianty. W Google Cloud należy wpisać identyczny URL w dozwolonych URI przekierowania.
 
 ## Wymagania
 
-- VPS z publiczną domeną/subdomeną i DNS kierującym na serwer; dla callbacku Google wymagany jest publiczny HTTPS, nie surowy publiczny adres IP.
-- Docker Engine i Docker Compose; otwarte TCP 443 oraz TCP 80 dla domyślnej automatycznej obsługi certyfikatu Caddy. Na tych portach nie może pracować inny serwer. Jeśli masz już proxy, dostosuj konfigurację i certyfikaty.
-- Konto Google i projekt Google Cloud. Dla użytkowników różnych organizacji lub kont osobistych wybierz typ aplikacji **External**; dla użytkowników własnej organizacji może być **Internal**.
-- Node.js 24 lub nowszy do uruchamiania/testowania poza Dockerem. Aplikacja używa `node:sqlite`, Express oraz oficjalnej biblioteki Google OAuth.
+- VPS z Docker Engine i Docker Compose.
+- Google Cloud project, Google OAuth client typu **Web application**, włączone Google Calendar API i Google Tasks API.
+- Publiczny HTTPS URL callbacku obsługiwany przez Twój zewnętrzny reverse proxy/gateway. Ten projekt nie zarządza domeną, TLS, certyfikatami, firewallem ani reverse proxy.
+- Node.js 24+ tylko do uruchamiania/testów bez Dockera.
 
-## Konfiguracja Google krok po kroku
+## Konfiguracja Google OAuth
 
 1. W [Google Cloud Console](https://console.cloud.google.com/) utwórz projekt lub wybierz istniejący.
-2. W **APIs & Services → Library** włącz **Google Calendar API** oraz **Google Tasks API**.
-3. W **Google Auth Platform → Branding** skonfiguruj nazwę aplikacji, adres wsparcia i kontaktowy. W **Audience** wybierz Internal albo External. Dla External w stanie Testing dodaj adresy użytkowników jako **Test users**. W **Data Access** dodaj zakresy potrzebne aplikacji.
-4. Aplikacja loguje użytkowników przez `openid` i `email`. Dla Calendar żąda `https://www.googleapis.com/auth/calendar.events.owned` oraz `https://www.googleapis.com/auth/calendar.calendarlist.readonly`; dlatego w panelu pokazuje tylko kalendarze, których użytkownik jest właścicielem. Dla Tasks żąda `https://www.googleapis.com/auth/tasks`. Zakres Tasks obejmuje wszystkie zadania, a zakres Calendar wszystkie własne kalendarze, także możliwość ich zmieniania i usuwania przez aplikację; wybór celu ogranicza działania samego gatewaya, nie uprawnienia Google tokenu. [Zakresy Calendar](https://developers.google.com/workspace/calendar/api/auth), [zakresy Tasks](https://developers.google.com/workspace/tasks/auth).
-5. W **Google Auth Platform → Clients → Create Client** wybierz **Web application**. W **Authorized redirect URIs** dodaj dokładnie `https://TWOJA-DOMENA/oauth/google/callback` i utwórz klienta. Zapisz `client_id`; `client_secret` będzie potrzebny jako sekret na VPS. Ścieżka i ewentualny port muszą zgadzać się dokładnie z `BASE_URL` oraz konfiguracją proxy.
-6. Google może wymagać weryfikacji aplikacji i domeny przy udostępnieniu na zewnątrz. W External + Testing refresh token dla tych zakresów zwykle wygasa po 7 dniach; są wyjątki organizacyjne. Administrator Workspace może ograniczyć dostęp. [Statusy OAuth](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview).
+2. W **APIs & Services → Library** włącz **Google Calendar API** i **Google Tasks API**.
+3. W **Google Auth Platform → Branding** ustaw nazwę aplikacji, adres wsparcia i kontakt. W **Audience** wybierz **Internal** dla kont z jednej organizacji Workspace lub **External** dla użytkowników spoza organizacji. W trybie External + Testing dodaj konta do **Test users**. Ogranicz użytkowników gatewaya również przez `ALLOWED_EMAILS`.
+4. W **Google Auth Platform → Data Access** dodaj wymagane zakresy:
+   - logowanie: `openid`, `email`;
+   - Calendar: `https://www.googleapis.com/auth/calendar.events.owned` i `https://www.googleapis.com/auth/calendar.calendarlist.readonly`;
+   - Tasks: `https://www.googleapis.com/auth/tasks`.
 
-## Uruchomienie na VPS
+   Calendar pokazuje tylko kalendarze, których użytkownik jest właścicielem. Zakresy OAuth nadają aplikacji szerszy dostęp niż pojedynczy wybrany cel; gateway ogranicza publikowanie do celu wskazanego przez użytkownika. Szczegóły: [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth), [Tasks scopes](https://developers.google.com/workspace/tasks/auth).
+5. W **Google Auth Platform → Clients → Create Client** utwórz klienta typu **Web application**. W **Authorized redirect URIs** wklej dokładnie wartość, której użyjesz w `OAUTH_REDIRECT_URL`, np. `https://calendar.example.org/google-workspace/oauth/google/callback`. Zapisz `Client ID` oraz `Client secret`. Nie dodawaj gwiazdek ani nie pomijaj prefiksu ścieżki.
+6. Przy publikacji OAuth na zewnątrz Google może wymagać weryfikacji aplikacji i domeny. W trybie External + Testing refresh token dla tych zakresów zwykle wygasa po 7 dniach. Administrator Workspace może także ograniczyć aplikacje OAuth.
 
-Pobierz aplikację i wykonuj poniższe polecenia w jej katalogu:
+## Instalacja i uruchomienie
 
 ```sh
 git clone https://github.com/sigmalko/google-workspace-gateway.git
 cd google-workspace-gateway
+cp .env.example .env
 ```
 
-Nie wklejaj sekretów do Issues, rozmów ani repozytorium.
+Edytuj `.env`:
 
-1. Skieruj DNS `A` na publiczne IPv4 VPS i, jeśli używasz IPv6, poprawnie skonfiguruj `AAAA`. Otwórz porty 80 i 443 w firewallu VPS i u dostawcy.
-2. Skopiuj konfigurację i edytuj ją:
+- `OAUTH_REDIRECT_URL` — pełny, publiczny callback HTTPS z dokładną ścieżką, którą zarejestrujesz w Google. Prefiks może być dowolny, np. `/google-workspace`; sama aplikacja wymaga końcówki `/oauth/google/callback`.
+- `GOOGLE_CLIENT_ID` — Client ID z Google Cloud.
+- `ALLOWED_EMAILS` — dozwolone adresy e-mail oddzielone przecinkami. Konta muszą też spełniać ustawienia Audience/Test users.
+- `BIND_ADDRESS` i `GATEWAY_PORT` — adres interfejsu hosta i port hosta, na którym ma być dostępne HTTP. Domyślnie `127.0.0.1:8765`, czyli dostęp tylko z tego VPS. `PORT=8765` wewnątrz kontenera jest stały.
 
-   ```sh
-   cp .env.example .env
-   ```
+Utwórz sekrety poza repozytorium. Nie wpisuj ich w poleceniach powłoki, repozytorium ani logach:
 
-   Ustaw w `.env`: `DOMAIN` jako samą domenę, `BASE_URL` jako `https://` plus ta sama domena, `GOOGLE_CLIENT_ID` i `ALLOWED_EMAILS` jako adresy rozdzielone przecinkami. To lista użytkowników z dostępem; przed jej rozszerzeniem pamiętaj o Google Test users. Zmiana listy wymaga ponownego utworzenia kontenera. Usunięcie adresu z listy blokuje również jego subskrypcje w API.
-3. Utwórz pliki sekretów poza Gitem:
-
-   ```sh
-   umask 077
-   mkdir -p secrets
-   openssl rand -base64 32 > secrets/encryption_key
-   openssl rand -hex 32 > secrets/agent_token
-   ```
-
-   Utwórz `secrets/google_client_secret` w edytorze, wklejając sam **client secret** z Google Cloud, bez JSON i bez cudzysłowów. Nie umieszczaj wartości w poleceniach ani historii powłoki. Ustaw pliki na `0600`, a katalog `secrets` na `0700`. Kontener aplikacji działa jako UID/GID `1000:1000`; w zwykłym Dockerze bind-mount plików musi być czytelny dla tego UID (w razie potrzeby nadaj mu własność plików, np. `sudo chown 1000:1000 secrets/*`). W rootless Docker lub przy mapowaniu użytkowników dopasuj własność do mapowania. Klucz szyfrowania, client secret i token agenta są osobnymi sekretami.
-4. Uruchom:
-
-   ```sh
-   docker compose up -d --build
-   docker compose ps
-   ```
-
-   Caddy wystawia publicznie 80/443 i kieruje tylko ścieżki panelu oraz callback do aplikacji. `/internal/v1/*` nie jest wystawiane przez publiczne proxy. Proces gatewaya używa portu 8765 w sieci Dockera i nie publikuje go na hoście. Caddy nie ma włączonych access logów; filtr usuwa pole żądania z domyślnych logów. Przy dodawaniu innych proxy, monitoringu lub logów zadbaj, by nie zapisywały URL callbacku z `code` i `state`, ciastek i nagłówków.
-5. Otwórz `https://TWOJA-DOMENA/`, zaloguj się do dozwolonego konta, wybierz połączenie Calendar/Tasks, zaakceptuj uprawnienia i wybierz kalendarz/listę. Najpierw użyj wydzielonego kalendarza i listy testowej. Do zmiany celu lub ponownego połączenia użytkownik ponownie korzysta z tej strony.
-6. Przekaż zaufanemu monitorowi **wyłącznie osobny** `agent_token`, np. jako plik sekretu. Klucz ma dostęp do **wszystkich włączonych subskrypcji**: ta wersja nie ma oddzielnych kluczy i uprawnień dla wielu agentów. Przekazuj go tylko jednemu zaufanemu monitorowi i rotuj przez zmianę pliku oraz odtworzenie gatewaya i klienta. Konfigurację klienta opisuje [README monitora](https://github.com/sigmalko/Cracow#publikacja-do-google-calendar-i-google-tasks).
-
-Monitor `Cracow` działa bezpośrednio z crona na hoście. Aby klient na tym samym VPS mógł dotrzeć do API bez uruchamiania w Dockerze, uruchom zamiast powyższego `docker compose -f compose.yaml -f compose.host.yaml up -d --build` i połącz się z `http://127.0.0.1:8765`. To opcjonalne mapowanie tylko na localhost; w Dockerze przed 28.0.0 inne hosty w tym samym segmencie L2 mogły je osiągnąć. Patrz [dokumentacja Dockera](https://docs.docker.com/engine/network/port-publishing/). Klient monitora dopuszcza HTTP tylko na adresie loopback. Jeśli monitor działa w osobnym kontenerze lub na innym hoście, skonfiguruj dla API osobny prywatny endpoint HTTPS z odpowiednią kontrolą dostępu; domyślny publiczny Caddy blokuje `/internal/v1/*`. Nie wystawiaj portu 8765 publicznie.
-
-Baza jest w wolumenie `gateway_data`, a certyfikaty w wolumenie Caddy. Zatrzymaj aplikację przed wykonywaniem spójnej kopii bazy SQLite albo użyj mechanizmu kopii SQLite; wykonuj też zabezpieczone kopie sekretów, w tym klucza szyfrowania, oddzielnie od bazy. Utrata klucza uniemożliwi odszyfrowanie tokenów. Nie uruchamiaj wielu replik gatewaya na tej samej bazie: synchronizacja odświeżania tokenów jest tylko wewnątrz jednego procesu.
-
-## Wewnętrzne API
-
-Dla wszystkich wywołań dodaj `Authorization: Bearer <agent_token>`. To nie jest Google access token. Unikaj wpisywania sekretu w polecenie powłoki lub umieszczania go w argumentach procesu; klient powinien wczytywać go z pliku.
-
-`GET /internal/v1/subscriptions` zwraca tylko identyfikatory i rodzaje włączonych celów dla dozwolonych, połączonych kont:
-
-```json
-{"subscriptions":[{"id":"identyfikator-subskrypcji","kind":"calendar"}]}
+```sh
+umask 077
+mkdir -p secrets
+openssl rand -base64 32 > secrets/encryption_key
+openssl rand -hex 32 > secrets/agent_token
 ```
 
-`POST /internal/v1/publications` wymaga dodatkowo stabilnego nagłówka `Idempotency-Key` i JSON:
+W edytorze utwórz `secrets/google_client_secret` i wklej sam Client secret. Sekrety powinny być czytelne dla użytkownika kontenera (`1000:1000`) i niedostępne dla innych użytkowników hosta. `agent_token` to osobny sekret dla agenta, nie Google token.
+
+Jeśli uruchamiasz checkout ze źródeł, zbuduj obraz lokalnie. Przy instalacji z GitLab Release plik `.env.example` wskazuje już wersjonowany obraz w registry i ten krok pomiń.
+
+```sh
+docker build -t google-workspace-gateway:local .
+```
+
+Uruchom jedyny plik Compose:
+
+```sh
+docker compose up -d
+docker compose ps
+```
+
+Aplikacja nasłuchuje HTTP na porcie `8765` w kontenerze. Domyślnie Compose publikuje go na `127.0.0.1:8765` hosta, więc reverse proxy działający na tym samym VPS może łączyć się z `http://127.0.0.1:8765`. Jeśli proxy znajduje się na innym hoście/kontenerze, ustaw `BIND_ADDRESS` na osiągalny prywatny interfejs albo użyj prywatnej sieci i ogranicz firewall do proxy. Ruch do tego portu nie jest szyfrowany przez tę aplikację; nie wystawiaj go publicznie bezpośrednio do Internetu. Nie konfiguruj w proxy dostępu publicznego do `/internal/v1/*`.
+
+W swoim reverse proxy skonfiguruj trasę publicznego callbacku i panelu do portu aplikacji. To proxy odpowiada za TLS, certyfikaty, domenę, ochronę przed nadużyciami i filtrowanie dostępu. Nie musi ono udostępniać API agentowi: agent na tym samym VPS powinien łączyć się do lokalnego portu HTTP. Jeżeli proxy przekazuje prefiks ścieżki, gateway go rozpozna; jeżeli go usuwa, gateway obsłuży ścieżki aplikacji od `/`.
+
+Otwórz w przeglądarce publiczny adres panelu, np. `https://calendar.example.org/google-workspace/`. Zaloguj się, połącz Calendar i/lub Tasks, zaakceptuj zakresy oraz wybierz cel. Dostęp do panelu ma tylko konto Google z `ALLOWED_EMAILS`.
+
+Baza SQLite jest przechowywana w wolumenie Dockera `gateway_data`. Refresh tokeny są szyfrowane kluczem z `secrets/encryption_key`; rób bezpieczne kopie bazy i tego klucza razem. Utrata klucza uniemożliwi odczyt tokenów. Jedna instancja aplikacji powinna używać jednej bazy; odświeżanie tokenów nie jest synchronizowane pomiędzy replikami.
+
+## Instalacja z GitLab Release
+
+Repozytorium źródłowe jest na GitHubie. Plik `.gitlab-ci.yml` uruchomi się dopiero po zaimportowaniu repozytorium do GitLaba lub skonfigurowaniu projektu/mirrora GitLab, który uruchamia pipeline dla commitów i tagów. W GitLab włącz Container Registry i Package Registry. Pipeline wymaga runnera Docker-in-Docker z obsługą TLS oraz trybem `privileged`; tokeny registry i CI `CI_JOB_TOKEN` są używane automatycznie, nie dodawaj własnego tokenu do zmiennych. Przy DinD runner musi współdzielić katalog certyfikatów klienta `/certs/client` z jobem.
+
+Każdy commit na domyślnej gałęzi buduje obraz `linux/amd64` i publikuje go pod tagami `latest` oraz `sha-<commit>`. Tag wersji `vMAJOR.MINOR.PATCH` buduje obraz pod wersją bez `v` i pod tagiem SHA, a po powodzeniu tworzy GitLab Release. Opis release zawiera instrukcję z `README.md`; assety to gotowy `docker-compose.yml` i `.env.example` z przypiętym obrazem dla tej wersji. Wzorzec jest podobny do flow w [agents-in-docker-with-dind](https://github.com/sigmalko/agents-in-docker-with-dind): publikacja `latest` z gałęzi głównej oraz wersjonowany obraz i release assety z tagu.
+
+W GitLabie utwórz i wypchnij tag wersji, np. `v0.1.0`, na commit domyślnej gałęzi. Z Release pobierz trzy assety. Skopiuj `.env.example` do `.env`, ustaw callback, Client ID, allowlistę oraz sekrety opisane wyżej; sprawdź, że `GATEWAY_IMAGE` wskazuje wersję z release. Następnie uruchom `docker compose pull` i `docker compose up -d`. Jeśli Container Registry projektu nie pozwala na anonimowe pobieranie, zaloguj hosta Docker do GitLab Registry przed `docker compose pull`. Nie dodawaj pliku `.env` ani sekretów do Gita.
+
+## Kontrakt integracji z agentem Cracow
+
+Cracow nie loguje się do Google i nie dostaje Google access ani refresh tokenów. Użytkownik przechodzi OAuth w panelu gatewaya, a Cracow używa wyłącznie `agent_token` do wewnętrznego API. Token uprawnia do wszystkich aktywnych subskrypcji; chroń go jak hasło i nie udostępniaj klasyfikatorowi/modelowi.
+
+Dla agenta działającego na tym samym VPS konfiguracja `.codex/state/config.json` w repo Cracow ma postać:
 
 ```json
 {
-  "subscriptionId": "identyfikator-subskrypcji",
-  "sourceEventId": "zrodlo:stabilny-id-wystepu",
+  "delivery": "google",
+  "gateway": {
+    "url": "http://127.0.0.1:8765",
+    "tokenFile": "/pełna/ścieżka/do/google-workspace-gateway/secrets/agent_token",
+    "instance": "moj-gateway",
+    "calendarDurationMinutes": 90
+  }
+}
+```
+
+Plik musi być dostępny tylko dla użytkownika uruchamiającego agenta. `instance` jest stabilną nazwą instalacji; nie zmieniaj jej przy zwykłym restarcie. `calendarDurationMinutes` (1–1440) jest potrzebne dla Calendar, ponieważ monitor nie ma potwierdzonego czasu końca. Agent dopuszcza HTTPS albo HTTP wyłącznie na loopback, bez ścieżki w `url`.
+
+Każde żądanie API wymaga nagłówka `Authorization: Bearer <agent_token>`. Agent powinien czytać token z pliku, nie przekazywać go w argumentach procesu i nie logować nagłówków.
+
+### `GET /internal/v1/subscriptions`
+
+Zwraca włączone cele dla połączonych, dozwolonych kont; nie ujawnia adresów e-mail ani tokenów:
+
+```json
+{"subscriptions":[{"id":"subscription-id","kind":"calendar"},{"id":"another-id","kind":"tasks"}]}
+```
+
+Agent publikuje do każdej zwróconej subskrypcji. Pusta lista oznacza, że użytkownik nie włączył celu.
+
+### `POST /internal/v1/publications`
+
+Wymaga `Content-Type: application/json` i nagłówka `Idempotency-Key` (agent Cracow używa stabilnego ID zweryfikowanego wydarzenia). Przykładowe ciało:
+
+```json
+{
+  "subscriptionId": "subscription-id",
+  "sourceEventId": "cracow:standup-pl:stable-event-id",
   "category": "stand-up",
   "title": "Nazwa występu",
   "start": "2027-03-12T19:00:00+01:00",
@@ -101,34 +137,52 @@ Dla wszystkich wywołań dodaj `Authorization: Bearer <agent_token>`. To nie jes
 }
 ```
 
-Obowiązkowe: `subscriptionId`, `sourceEventId`, `title`, `start` i prawidłowa nazwa strefy IANA `timeZone`; `end` jest obowiązkowe dla Calendar i musi być późniejsze od początku. Jeśli `end` jest podane dla Tasks, jest również walidowane. Pozostałe pola są opcjonalne; adres źródła, jeżeli podany, musi być HTTPS. Daty używają RFC 3339 z offsetem. Dla monitora Kraków należy wypełnić pola źródła i czasu weryfikacji oraz stosować `Europe/Warsaw`; monitor sam ustala politykę brakującego czasu końca.
+Wymagane pola: `subscriptionId`, `sourceEventId`, `title`, `start`, `timeZone`; Calendar wymaga też `end` późniejszego niż `start`. Czas musi być datą RFC 3339 z offsetem, strefa nazwą IANA. Dla Cracow należy przekazywać źródło oraz czas weryfikacji. Google Tasks przechowuje termin tylko jako datę, a godzinę wydarzenia gateway zapisuje w notatce.
 
-Wyniki: `201` / `created` po zapisie, `200` / `already_exists` dla tego samego klucza i danych, `409` / `idempotency_conflict` gdy ten sam klucz ma inne dane, `409` / `source_already_recorded` dla tego samego źródła z innym kluczem, `409` / `reauthorization_required` gdy potrzebna nowa zgoda, `503` przy problemie z uzyskaniem tokenu przed publikacją. `404` oznacza brak lub wyłączenie subskrypcji, `400` niepoprawne dane, `401` zły token usługi. Wartości kodów i statusów klient powinien obsługiwać jawnie.
+Typowe odpowiedzi:
 
-Klucz i identyfikator źródła są niezależnie unikalne dla subskrypcji. Wybór innego celu tworzy inną subskrypcję, a powrót do poprzedniego zachowuje jej historię. `POST` nie ma trybu podglądu: `--dry-run` należy zrealizować w kliencie **bez wysyłania** żądania publikacji. Rekordy nie są automatycznie aktualizowane ani usuwane.
+- `201 {"status":"created","id":"..."}` — utworzono wpis;
+- `200 {"status":"already_exists","id":"..."}` — identyczne żądanie już obsłużono;
+- `409` z `idempotency_conflict`, `source_already_recorded` lub `reauthorization_required` — nie ponawiać bez rozwiązania przyczyny;
+- `409 {"status":"uncertain",...}` — sprawdź ręcznie stan w Google i uzgodnij go procedurą niżej;
+- `400` — niepoprawne dane, `401` — niepoprawny token, `404` — brak/wyłączona subskrypcja, `503` — Google chwilowo niedostępne.
 
-### Niepewny wynik
+`--dry-run` w Cracow nie wywołuje endpointu publikacji. Gateway nie aktualizuje ani nie usuwa wcześniej utworzonych wpisów. Agent powinien zachowywać lokalny rejestr publikacji i nie ponawiać wyniku `uncertain` automatycznie.
 
-Przy awarii w trakcie zapisu pośrednik zwraca `409` / `uncertain`; ponowienie z tym samym kluczem nie wysyła drugi raz do Google. Nie twierdzimy, że da się zagwarantować dokładnie jeden zapis przez dwie niezależne usługi. Zatrzymaj ponawianie z monitora i sprawdź wynik:
+### Uzgadnianie wyniku `uncertain`
+
+Przy niejednoznacznej awarii gateway blokuje automatyczne ponowne wysłanie, aby ograniczyć duplikaty. Zatrzymaj monitor i sprawdź zdarzenie/zadanie na koncie Google. Następnie można sprawdzić wynik:
 
 ```sh
 docker compose exec gateway node src/resolve.mjs SUBSCRIPTION_ID IDEMPOTENCY_KEY --inspect
 ```
 
-Inspekcja sprawdza Calendar po deterministycznym ID i znaczniku lub listę Tasks po znaczniku w notatce, z uwzględnieniem ukończonych i ukrytych zadań. Zwraca ID kandydatów, nie tokeny. Brak wyniku nie dowodzi, że zapis się nie powiódł; znaczniki mogą być usunięte lub zmienione, a dane mogą nie być jeszcze widoczne. Jeżeli ręcznie potwierdzono właściwy wpis i jego ID, oznacz go jako utworzony:
+Po potwierdzeniu poprawnego wpisu oznacz go jako utworzony:
 
 ```sh
 docker compose exec gateway node src/resolve.mjs SUBSCRIPTION_ID IDEMPOTENCY_KEY --created GOOGLE_ID
 ```
 
-Dopiero po ustaleniu, że żaden wpis nie został utworzony, można jawnie zezwolić na ponowienie przez `--retry` zamiast `--created GOOGLE_ID`. Wykonuj uzgadnianie po zatrzymaniu monitora i innych operacji na danej subskrypcji. Jeśli wpisów jest kilka lub nie da się ustalić wyniku, nie ponawiaj automatycznie.
+Użyj `--retry` wyłącznie po ręcznym potwierdzeniu, że Google nie utworzył wpisu. Gdy nie można ustalić wyniku, nie ponawiaj publikacji.
 
-## Testy i ograniczenia
+## Wielu użytkowników i zakres dostępu
+
+Wiele osób może korzystać z tej samej instancji, o ile ich adresy znajdują się w `ALLOWED_EMAILS` i dopuszcza je konfiguracja Google OAuth. Każda osoba loguje się własnym kontem, przechodzi zgodę OAuth i wybiera własny kalendarz/listę. Baza rozdziela tożsamości, sesje, zakresy, cele i zaszyfrowane refresh tokeny. Usunięcie osoby z allowlisty blokuje jej dostęp do API, ale administrator powinien także odłączyć jej konto w panelu i usunąć ją z konfiguracji Google, jeśli to potrzebne.
+
+## Ograniczenia i kontrola
+
+- Refresh token jest szyfrowany w spoczynku i używany tylko przez gateway do pobrania/odświeżenia krótkotrwałego access tokenu. Przy `invalid_grant` połączenie przechodzi w `reauthorization_required`; użytkownik musi ponownie przyznać zgodę.
+- Użytkownik może lokalnie wyłączyć subskrypcję lub odłączyć konto; zgodę OAuth może cofnąć też w ustawieniach Google. Odłączenie nie usuwa wydarzeń ani zadań.
+- Jeden `agent_token` ma dostęp do wszystkich włączonych subskrypcji; obecnie brak odrębnych kluczy i ACL per agent.
+- Projekt nie został poddany niezależnemu audytowi bezpieczeństwa. Ogranicz dostęp sieciowy i uprawnienia do sekretów, wykonuj kopie zapasowe i monitoruj stan usługi.
+
+## Kontrola lokalna
 
 ```sh
 npm ci
 npm test
 npm audit --omit=dev
+git diff --check
 ```
 
-Testy używają lokalnego HTTP, bazy w pamięci i atrap Google: obejmują m.in. OAuth state/PKCE, odświeżanie, separację kont, CSRF, idempotencję, niepewne zapisy i daty. Nie łączą się z Google i nie tworzą wydarzeń. Przed produkcyjnym użyciem przetestuj pełny OAuth, odnawianie tokenów po restarcie, certyfikat, prywatność API i zapisy w wydzielonym kalendarzu/listach. Przygotuj ochronę przed nadużyciami/rate limiting na poziomie proxy, monitoring i procedurę kopii. Aktualnie brak per-agent ACL, automatycznych migracji schematu bazy, automatycznych aktualizacji/usuwania wydarzeń i rozproszonej synchronizacji replik. Projekt nie przeszedł niezależnego audytu bezpieczeństwa.
+Testy używają lokalnego HTTP, bazy w pamięci i atrap Google. Nie logują się do Google ani nie tworzą wpisów.

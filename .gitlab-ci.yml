@@ -1,0 +1,83 @@
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+    - when: never
+
+stages:
+  - image
+  - package
+  - release
+
+variables:
+  DOCKER_HOST: tcp://docker:2376
+  DOCKER_TLS_CERTDIR: /certs
+  DOCKER_TLS_VERIFY: "1"
+  DOCKER_CERT_PATH: "$DOCKER_TLS_CERTDIR/client"
+
+build-and-push-image:
+  stage: image
+  image: docker:27.5.1-cli
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+  before_script:
+    - docker info
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+  script:
+    - |
+      SHORT_TAG="sha-${CI_COMMIT_SHORT_SHA}"
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+        IMAGE_TAGS="$VERSION $SHORT_TAG"
+      else
+        IMAGE_TAGS="latest $SHORT_TAG"
+        VERSION="$CI_COMMIT_SHORT_SHA"
+      fi
+      docker build --pull \
+        --build-arg IMAGE_VERSION="$VERSION" \
+        --build-arg IMAGE_REVISION="$CI_COMMIT_SHA" \
+        --tag "$CI_REGISTRY_IMAGE:$SHORT_TAG" .
+      for TAG in $IMAGE_TAGS; do
+        docker tag "$CI_REGISTRY_IMAGE:$SHORT_TAG" "$CI_REGISTRY_IMAGE:$TAG"
+        docker push "$CI_REGISTRY_IMAGE:$TAG"
+      done
+
+prepare-release-assets:
+  stage: package
+  image: curlimages/curl:8.12.1
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - mkdir -p release-assets
+    - cp README.md docker-compose.yml release-assets/
+    - sed "s#^GATEWAY_IMAGE=.*#GATEWAY_IMAGE=${CI_REGISTRY_IMAGE}:${VERSION}#" .env.example > release-assets/.env.example
+    - |
+      PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/google-workspace-gateway/${VERSION}"
+      for FILE in README.md docker-compose.yml .env.example; do
+        curl --fail --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "release-assets/${FILE}" "${PACKAGE_URL}/${FILE}"
+      done
+      echo "VERSION=${VERSION}" > release.env
+  artifacts:
+    paths:
+      - release-assets/
+    reports:
+      dotenv: release.env
+    expire_in: 1 day
+
+create-release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/cli:v1.58.0
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  needs:
+    - job: prepare-release-assets
+      artifacts: true
+  variables:
+    GLAB_ENABLE_CI_AUTOLOGIN: "true"
+  script:
+    - |
+      PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/google-workspace-gateway/${VERSION}"
+      ASSETS_LINKS="[{\"name\":\"README.md\",\"url\":\"${PACKAGE_URL}/README.md\",\"link_type\":\"other\"},{\"name\":\"docker-compose.yml\",\"url\":\"${PACKAGE_URL}/docker-compose.yml\",\"link_type\":\"package\"},{\"name\":\".env.example\",\"url\":\"${PACKAGE_URL}/.env.example\",\"link_type\":\"other\"}]"
+      glab release create "$CI_COMMIT_TAG" --name "Google Workspace Gateway ${CI_COMMIT_TAG}" --notes-file release-assets/README.md --ref "$CI_COMMIT_SHA" --assets-links "$ASSETS_LINKS"
