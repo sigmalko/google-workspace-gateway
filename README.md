@@ -33,15 +33,24 @@ Google kieruje przeglądarkę na skonfigurowany `OAUTH_REDIRECT_URL`, np. `https
 
 ## Instalacja i uruchomienie
 
+Pobierz `docker-compose.yml` i `env.example` z tego samego [GitHub Release](https://github.com/sigmalko/google-workspace-gateway/releases). Poniższy przykład instaluje wersję `v0.1.2`; aby wybrać inną wersję, zmień `RELEASE`. Nie trzeba klonować repozytorium ani budować obrazu.
+
 ```sh
-git clone https://github.com/sigmalko/google-workspace-gateway.git
+mkdir -p google-workspace-gateway
 cd google-workspace-gateway
+RELEASE=v0.1.2
+RELEASE_URL="https://github.com/sigmalko/google-workspace-gateway/releases/download/${RELEASE}"
+curl -fL "$RELEASE_URL/docker-compose.yml" -o docker-compose.yml
+curl -fL "$RELEASE_URL/env.example" -o .env.example
 cp .env.example .env
 ```
+
+Podane polecenia są przeznaczone do pierwszej instalacji w nowym katalogu: `cp` zastąpi istniejący plik `.env`. Przy aktualizacji zachowaj swoją konfigurację i sekrety, pobierz pliki nowej wersji oraz ustaw w istniejącym `.env` wartość `GATEWAY_IMAGE` z nowego `.env.example`.
 
 Edytuj `.env`:
 
 - `OAUTH_REDIRECT_URL` — pełny, publiczny callback HTTPS z dokładną ścieżką, którą zarejestrujesz w Google. Prefiks może być dowolny, np. `/google-workspace`; sama aplikacja wymaga końcówki `/oauth/google/callback`.
+- `GATEWAY_IMAGE` — adres obrazu GHCR przypiętego do wybranego wydania; wartość jest przygotowana w pobranym `env.example`.
 - `GOOGLE_CLIENT_ID` — Client ID z Google Cloud.
 - `ALLOWED_EMAILS` — dozwolone adresy e-mail oddzielone przecinkami, np. `ALLOWED_EMAILS=anna@example.com,jan@example.com`. Spacje wokół adresów są usuwane, a wielkość liter nie ma znaczenia. Konta muszą też spełniać ustawienia Audience/Test users.
 - `BIND_ADDRESS` i `GATEWAY_PORT` — adres interfejsu hosta i port hosta, na którym ma być dostępne HTTP. Domyślnie `127.0.0.1:8765`, czyli dostęp tylko z tego VPS. `PORT=8765` wewnątrz kontenera jest stały.
@@ -56,20 +65,17 @@ openssl rand -base64 32 > secrets/encryption_key
 openssl rand -hex 32 > secrets/agent_token
 ```
 
-W edytorze utwórz `secrets/google_client_secret` i wklej sam Client secret. Sekrety powinny być czytelne dla użytkownika kontenera (`1000:1000`) i niedostępne dla innych użytkowników hosta. `agent_token` to osobny sekret dla agenta, nie Google token.
+W edytorze utwórz `secrets/google_client_secret` i wklej sam Client secret, bez JSON i cudzysłowów. Pliki sekretów powinny mieć uprawnienia `0600`, a katalog `secrets` — `0700`. Muszą być czytelne dla użytkownika kontenera (`1000:1000`); w zwykłym Dockerze, jeśli pliki nie należą do tego UID, można ustawić ich właściciela poleceniem `sudo chown 1000:1000 secrets/*`. Przy rootless Dockerze lub mapowaniu użytkowników dopasuj własność do mapowania. Użytkownik uruchamiający monitor Cracow potrzebuje też dostępu do pliku `agent_token`. Jest to osobny sekret dla agenta, nie Google token.
 
-Jeśli uruchamiasz checkout ze źródeł, zbuduj obraz lokalnie. Przy instalacji z release plik `.env.example` wskazuje już wersjonowany obraz w registry i ten krok pomiń.
-
-```sh
-docker build -t google-workspace-gateway:local .
-```
-
-Uruchom jedyny plik Compose:
+Pobierz przypięty obraz i uruchom aplikację:
 
 ```sh
+docker compose pull
 docker compose up -d
 docker compose ps
 ```
+
+Jeśli pakiet GHCR jest prywatny, przed pobraniem zaloguj Dockera do GHCR kontem mającym dostęp do pakietu albo ustaw publiczną widoczność pakietu. Instrukcja [budowania ze źródeł](#budowanie-ze-źródeł) jest przeznaczona dla osób rozwijających aplikację.
 
 Aplikacja nasłuchuje HTTP na porcie `8765` w kontenerze. Domyślnie Compose publikuje go na `127.0.0.1:8765` hosta, więc reverse proxy działający na tym samym VPS może łączyć się z `http://127.0.0.1:8765`. Jeśli proxy znajduje się na innym hoście/kontenerze, ustaw `BIND_ADDRESS` na osiągalny prywatny interfejs albo użyj prywatnej sieci i ogranicz firewall do proxy. Ruch do tego portu nie jest szyfrowany przez tę aplikację; nie wystawiaj go publicznie bezpośrednio do Internetu. Nie konfiguruj w proxy dostępu publicznego do `/internal/v1/*`.
 
@@ -97,7 +103,7 @@ GitHub Actions uruchamia testy dla pull requestów, pushy na `main` i tagów `v*
 
 Obraz zawiera etykiety OCI opisujące projekt, jego źródła, dokumentację, wydawcę, wersję i commit. Przy budowaniu lokalnym wersja to `dev`, a commit `unknown`, chyba że podasz argumenty `IMAGE_VERSION` i `IMAGE_REVISION`; GitHub Actions ustawia je automatycznie i dodaje datę utworzenia.
 
-Aby wydać wersję, wypchnij nowy tag, np. `git tag v0.1.0` i `git push origin v0.1.0`. Release zawiera opis instalacji oraz trzy pliki: `docker-compose.yml`, `env.example` (GitHub usuwa początkową kropkę z nazw assetów) i `README.md`. W `env.example` jest ustawiony obraz przypięty do danej wersji. Pobierz te pliki z konkretnego release, zmień nazwę `env.example` na `.env` i skonfiguruj go oraz pliki sekretów według sekcji instalacji. Następnie uruchom `docker compose pull` i `docker compose up -d`. Jeśli pakiet GHCR jest prywatny, zaloguj Dockera do GHCR albo zmień widoczność pakietu; samo publiczne repozytorium nie gwarantuje publicznej widoczności obrazu.
+Aby wydać wersję, wypchnij nowy tag, np. `git tag v0.2.0` i `git push origin v0.2.0`. Release zawiera opis instalacji oraz trzy pliki: `docker-compose.yml`, `env.example` (GitHub usuwa początkową kropkę z nazw assetów) i `README.md`. W `env.example` jest ustawiony obraz przypięty do danej wersji. Pobierz te pliki z konkretnego release, zmień nazwę `env.example` na `.env` i skonfiguruj go oraz pliki sekretów według sekcji instalacji. Następnie uruchom `docker compose pull` i `docker compose up -d`. Jeśli pakiet GHCR jest prywatny, zaloguj Dockera do GHCR albo zmień widoczność pakietu; samo publiczne repozytorium nie gwarantuje publicznej widoczności obrazu.
 
 ## Alternatywny pipeline GitLab
 
@@ -196,6 +202,19 @@ Wiele osób może korzystać z tej samej instancji, o ile ich adresy znajdują s
 - Użytkownik może lokalnie wyłączyć subskrypcję lub odłączyć konto; zgodę OAuth może cofnąć też w ustawieniach Google. Odłączenie nie usuwa wydarzeń ani zadań.
 - Jeden `agent_token` ma dostęp do wszystkich włączonych subskrypcji; obecnie brak odrębnych kluczy i ACL per agent.
 - Projekt nie został poddany niezależnemu audytowi bezpieczeństwa. Ogranicz dostęp sieciowy i uprawnienia do sekretów, wykonuj kopie zapasowe i monitoruj stan usługi.
+
+## Budowanie ze źródeł
+
+Aby rozwijać aplikację lub zbudować własny obraz, pobierz repozytorium i użyj lokalnego szablonu konfiguracji:
+
+```sh
+git clone https://github.com/sigmalko/google-workspace-gateway.git
+cd google-workspace-gateway
+cp .env.example .env
+docker build -t google-workspace-gateway:local .
+```
+
+Uzupełnij `.env` i utwórz pliki sekretów zgodnie z instrukcją instalacji. Lokalny `.env.example` ustawia `GATEWAY_IMAGE=google-workspace-gateway:local`; następnie użyj `docker compose up -d`.
 
 ## Kontrola lokalna
 
