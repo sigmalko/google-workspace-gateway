@@ -2,7 +2,7 @@
 
 Aplikacja webowa pośredniczy pomiędzy agentem a Google Calendar i Google Tasks. Wielu użytkowników może zalogować się kontem Google, udzielić zgody, wybrać własny kalendarz lub listę zadań i włączyć publikację. OAuth, przechowywanie tokenów i wywołania Google API obsługuje gateway; agent korzysta z osobnego wewnętrznego REST API.
 
-Projekt powstał dla [monitora występów Kraków](https://github.com/sigmalko/Cracow). **Klient monitora nie jest jeszcze zintegrowany z gatewayem**: wymaga osobnych zmian w tamtym repozytorium. Ta wersja jest punktem wyjścia do uruchomienia i testów; nie została przetestowana z prawdziwym kontem Google ani jako obraz Docker w środowisku autora zmian.
+Projekt powstał dla [monitora występów Kraków](https://github.com/sigmalko/Cracow). Klient monitora w repozytorium Cracow obsługuje to API po skonfigurowaniu trybu `google`. Ta wersja jest punktem wyjścia do uruchomienia i testów; nie została przetestowana z prawdziwym kontem Google ani jako obraz Docker w środowisku autora zmian.
 
 ## Jak to działa
 
@@ -32,7 +32,14 @@ Wysyłający odpowiada za weryfikację prawdziwości i pochodzenia danych. Gatew
 
 ## Uruchomienie na VPS
 
-Wykonuj polecenia w katalogu tego repozytorium. Nie wklejaj sekretów do Issues, rozmów ani repozytorium.
+Pobierz aplikację i wykonuj poniższe polecenia w jej katalogu:
+
+```sh
+git clone https://github.com/sigmalko/google-workspace-gateway.git
+cd google-workspace-gateway
+```
+
+Nie wklejaj sekretów do Issues, rozmów ani repozytorium.
 
 1. Skieruj DNS `A` na publiczne IPv4 VPS i, jeśli używasz IPv6, poprawnie skonfiguruj `AAAA`. Otwórz porty 80 i 443 w firewallu VPS i u dostawcy.
 2. Skopiuj konfigurację i edytuj ją:
@@ -61,9 +68,9 @@ Wykonuj polecenia w katalogu tego repozytorium. Nie wklejaj sekretów do Issues,
 
    Caddy wystawia publicznie 80/443 i kieruje tylko ścieżki panelu oraz callback do aplikacji. `/internal/v1/*` nie jest wystawiane przez publiczne proxy. Proces gatewaya używa portu 8765 w sieci Dockera i nie publikuje go na hoście. Caddy nie ma włączonych access logów; filtr usuwa pole żądania z domyślnych logów. Przy dodawaniu innych proxy, monitoringu lub logów zadbaj, by nie zapisywały URL callbacku z `code` i `state`, ciastek i nagłówków.
 5. Otwórz `https://TWOJA-DOMENA/`, zaloguj się do dozwolonego konta, wybierz połączenie Calendar/Tasks, zaakceptuj uprawnienia i wybierz kalendarz/listę. Najpierw użyj wydzielonego kalendarza i listy testowej. Do zmiany celu lub ponownego połączenia użytkownik ponownie korzysta z tej strony.
-6. Podłącz zaufany kontener monitora do sieci `google-workspace-gateway-agent`, użyj adresu `http://gateway:8765` i przekaż mu **wyłącznie osobny** `agent_token`, np. jako plik sekretu. Nazwę DNS `gateway` należy potwierdzić w konkretnej konfiguracji Compose; alternatywnie ustaw jawny alias sieciowy. Klucz ten ma dostęp do **wszystkich włączonych subskrypcji**: ta wersja nie ma oddzielnych kluczy i uprawnień dla wielu agentów. Przekazuj go tylko jednemu zaufanemu monitorowi i rotuj przez zmianę pliku oraz odtworzenie gatewaya i klienta. Sieć Docker ogranicza trasę dostępu, ale nie zastępuje uwierzytelnienia.
+6. Przekaż zaufanemu monitorowi **wyłącznie osobny** `agent_token`, np. jako plik sekretu. Klucz ma dostęp do **wszystkich włączonych subskrypcji**: ta wersja nie ma oddzielnych kluczy i uprawnień dla wielu agentów. Przekazuj go tylko jednemu zaufanemu monitorowi i rotuj przez zmianę pliku oraz odtworzenie gatewaya i klienta. Konfigurację klienta opisuje [README monitora](https://github.com/sigmalko/Cracow#publikacja-do-google-calendar-i-google-tasks).
 
-Monitor `Cracow` obecnie działa bezpośrednio z crona na hoście. Aby przyszły klient na tym samym VPS mógł dotrzeć do API bez uruchamiania w Dockerze, uruchom zamiast powyższego `docker compose -f compose.yaml -f compose.host.yaml up -d --build` i połącz się z `http://127.0.0.1:8765`. To opcjonalne mapowanie tylko na localhost; w Dockerze przed 28.0.0 inne hosty w tym samym segmencie L2 mogły je osiągnąć. Patrz [dokumentacja Dockera](https://docs.docker.com/engine/network/port-publishing/). Jeśli połączenie przebiega poza lokalnym, zaufanym hostem, dodaj TLS i odpowiednią kontrolę dostępu; nie wystawiaj tego portu publicznie.
+Monitor `Cracow` działa bezpośrednio z crona na hoście. Aby klient na tym samym VPS mógł dotrzeć do API bez uruchamiania w Dockerze, uruchom zamiast powyższego `docker compose -f compose.yaml -f compose.host.yaml up -d --build` i połącz się z `http://127.0.0.1:8765`. To opcjonalne mapowanie tylko na localhost; w Dockerze przed 28.0.0 inne hosty w tym samym segmencie L2 mogły je osiągnąć. Patrz [dokumentacja Dockera](https://docs.docker.com/engine/network/port-publishing/). Klient monitora dopuszcza HTTP tylko na adresie loopback. Jeśli monitor działa w osobnym kontenerze lub na innym hoście, skonfiguruj dla API osobny prywatny endpoint HTTPS z odpowiednią kontrolą dostępu; domyślny publiczny Caddy blokuje `/internal/v1/*`. Nie wystawiaj portu 8765 publicznie.
 
 Baza jest w wolumenie `gateway_data`, a certyfikaty w wolumenie Caddy. Zatrzymaj aplikację przed wykonywaniem spójnej kopii bazy SQLite albo użyj mechanizmu kopii SQLite; wykonuj też zabezpieczone kopie sekretów, w tym klucza szyfrowania, oddzielnie od bazy. Utrata klucza uniemożliwi odszyfrowanie tokenów. Nie uruchamiaj wielu replik gatewaya na tej samej bazie: synchronizacja odświeżania tokenów jest tylko wewnątrz jednego procesu.
 
