@@ -1,0 +1,52 @@
+services:
+  gateway:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      BASE_URL: ${BASE_URL:?Ustaw BASE_URL}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Ustaw GOOGLE_CLIENT_ID}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:?Ustaw ALLOWED_EMAILS}
+      GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+      AGENT_TOKEN_FILE: /run/secrets/agent_token
+      ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
+      DB_PATH: /data/gateway.sqlite
+      PORT: 8765
+    secrets:
+      - google_client_secret
+      - agent_token
+      - encryption_key
+    volumes:
+      - gateway_data:/data
+    networks:
+      - proxy
+      - agent
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Ustaw DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - proxy
+secrets:
+  google_client_secret:
+    file: ./secrets/google_client_secret
+  agent_token:
+    file: ./secrets/agent_token
+  encryption_key:
+    file: ./secrets/encryption_key
+volumes:
+  gateway_data:
+  caddy_data:
+  caddy_config:
+networks:
+  proxy:
+  agent:
+    name: google-workspace-gateway-agent

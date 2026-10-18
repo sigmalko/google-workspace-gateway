@@ -1,0 +1,5 @@
+# Opcjonalnie: dostęp z procesu monitora działającego bez kontenera na tym samym VPS.
+services:
+  gateway:
+    ports:
+      - "127.0.0.1:8765:8765"

@@ -1,0 +1,28 @@
+{
+  "name": "google-workspace-gateway",
+  "version": "0.1.0",
+  "description": "Brama OAuth i API dla Google Calendar i Google Tasks",
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/server.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sigmalko/google-workspace-gateway.git"
+  },
+  "keywords": [],
+  "license": "UNLICENSED",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/sigmalko/google-workspace-gateway/issues"
+  },
+  "homepage": "https://github.com/sigmalko/google-workspace-gateway#readme",
+  "dependencies": {
+    "express": "^5.3.0",
+    "google-auth-library": "^11.3.1"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "private": true
+}
