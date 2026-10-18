@@ -27,5 +27,7 @@ export function readConfig(env = process.env) {
   if (!clientId) throw Error('Ustaw GOOGLE_CLIENT_ID.');
   const port = Number(env.PORT || 8765);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Niepoprawny PORT.');
-  return { redirectUrl: redirect.toString(), secureCookies: redirect.protocol === 'https:', mountPath, clientId, clientSecret, encryptionKey: key, agentToken: apiToken, allowed, port, dbPath: env.DB_PATH || './data/gateway.sqlite' };
+  const logMaxBytes = Number(env.LOG_MAX_BYTES || 10485760);
+  if (!Number.isSafeInteger(logMaxBytes) || logMaxBytes < 1024 || logMaxBytes > 1073741824) throw Error('LOG_MAX_BYTES musi wynosić od 1024 do 1073741824.');
+  return { redirectUrl: redirect.toString(), secureCookies: redirect.protocol === 'https:', mountPath, clientId, clientSecret, encryptionKey: key, agentToken: apiToken, allowed, port, dbPath: env.DB_PATH || './data/gateway.sqlite', logFile: env.LOG_FILE || './data/gateway.log', logMaxBytes };
 }

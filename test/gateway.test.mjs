@@ -5,7 +5,7 @@ import { Store } from '../src/store.mjs';
 import { createApp } from '../src/app.mjs';
 import { SCOPES } from '../src/google.mjs';
 
-function setup() {
+function setup(logger) {
   const store = new Store(':memory:', randomBytes(32));
   const config = { baseUrl: 'http://127.0.0.1:8765', agentToken: 'a'.repeat(40), allowed: ['a@example.com', 'b@example.com'] };
   let calls = 0;
@@ -17,7 +17,7 @@ function setup() {
     authorize: async () => 'https://accounts.google.com/',
     exchange: async () => ({ identity: { sub: 'a', email: 'a@example.com', email_verified: true }, tokens: { access_token: 'access', refresh_token: 'refresh', expiry_date: Date.now()+3600000 }, scopes: SCOPES.calendar })
   };
-  const app = createApp({ config, store, google });
+  const app = createApp({ config, store, google, logger });
   const server = app.listen(0);
   const user = store.login('a', 'a@example.com');
   store.saveCredentials(user.id, { refresh_token: 'SECRET_REFRESH' }, [...SCOPES.calendar, ...SCOPES.tasks]);
@@ -139,5 +139,19 @@ test('usunięcie adresu z listy odbiera dostęp do subskrypcji', async () => {
     const response = await fetch(`${t.url()}/internal/v1/subscriptions`, { headers: { Authorization: `Bearer ${t.config.agentToken}` } });
     assert.deepEqual((await response.json()).subscriptions, []);
     assert.equal((await post(t, sample(t.subscriptions[0].id))).status, 404);
+  } finally { t.stop(); }
+});
+
+test('log żądań nie zapisuje parametrów URL, tokenów ani treści publikacji', async () => {
+  const records = [];
+  const t = setup({ write: (event, details) => records.push({ event, ...details }) });
+  try {
+    await fetch(`${t.url()}/oauth/google/callback?code=SECRET_CODE&state=SECRET_STATE`, { headers: { cookie: `gateway_session=${t.session.raw}` } });
+    const event = { ...sample(t.subscriptions[0].id), title: 'SECRET_TITLE' };
+    assert.equal((await post(t, event)).status, 201);
+    const log = JSON.stringify(records);
+    assert.ok(log.includes('/oauth/google/callback'));
+    assert.ok(log.includes('created'));
+    for (const secret of ['SECRET_CODE', 'SECRET_STATE', 'SECRET_TITLE', t.config.agentToken, t.session.raw, event.sourceEventId]) assert.ok(!log.includes(secret));
   } finally { t.stop(); }
 });

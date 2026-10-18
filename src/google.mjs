@@ -5,7 +5,7 @@ export const SCOPES = {
   tasks: ['https://www.googleapis.com/auth/tasks']
 };
 export class Google {
-  constructor(config, store) { this.config = config; this.store = store; this.refreshing = new Map(); }
+  constructor(config, store, logger) { this.config = config; this.store = store; this.logger = logger; this.refreshing = new Map(); }
   client() { return new OAuth2Client(this.config.clientId, this.config.clientSecret, this.config.redirectUrl); }
   async authorize(store, session, purpose) {
     const client = this.client();
@@ -46,13 +46,16 @@ export class Google {
       const scopeInfo = await client.getTokenInfo(next.access_token);
       const update = this.store.db.prepare("UPDATE users SET credentials=?, scopes=? WHERE id=? AND credentials=? AND status='connected'").run(this.store.encrypt(next), JSON.stringify(scopeInfo.scopes), user.id, current.credentials);
       if (update.changes !== 1) throw new Error('reauthorization_required');
+      this.logger?.write('google_token_refreshed');
       return next.access_token;
     } catch (error) {
       if (error.response?.data?.error === 'invalid_grant') {
         this.store.db.prepare("UPDATE users SET status='reauthorization_required' WHERE id=? AND credentials=? AND status='connected'").run(user.id, current.credentials);
+        this.logger?.write('google_reauthorization_required');
         throw new Error('reauthorization_required');
       }
       if (error.message === 'reauthorization_required') throw error;
+      this.logger?.write('google_token_refresh_failed');
       throw new Error('google_unavailable');
     }
   }

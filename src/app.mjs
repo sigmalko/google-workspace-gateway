@@ -49,13 +49,22 @@ function serviceAuth(config) {
     next();
   };
 }
-export function createApp({ config, store, google }) {
+export function createApp({ config, store, google, logger }) {
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     if (config.mountPath && (req.path === config.mountPath || req.path.startsWith(`${config.mountPath}/`))) {
       req.url = req.url.slice(config.mountPath.length) || '/';
     }
+    next();
+  });
+  app.use((req, res, next) => {
+    const fixed = new Set(['/', '/healthz', '/login', '/oauth/google/callback', '/disconnect', '/logout', '/internal/v1/subscriptions', '/internal/v1/publications']);
+    const match = /^\/(connect|targets|disable)\/(calendar|tasks)$/.exec(req.path);
+    const route = fixed.has(req.path) ? req.path : match ? `/${match[1]}/:kind` : 'unknown';
+    const method = ['GET', 'POST'].includes(req.method) ? req.method : 'OTHER';
+    const started = Date.now();
+    res.on('finish', () => logger?.write('http_request', { method, route, ...(match ? { kind: match[2] } : {}), ...(res.locals.logKind ? { kind: res.locals.logKind } : {}), status: res.statusCode, durationMs: Date.now() - started, ...(res.locals.logOutcome ? { outcome: res.locals.logOutcome } : {}) }));
     next();
   });
   app.use((req, res, next) => {
@@ -120,6 +129,7 @@ export function createApp({ config, store, google }) {
         const user = store.login(result.identity.sub, email);
         const session = store.rotateSession(req.session, user.id);
         setCookie(res, config, session.raw);
+        res.locals.logOutcome = 'login_completed';
         return res.redirect(path(config, '/'));
       }
       const user = store.user(req.session.user_id);
@@ -128,6 +138,7 @@ export function createApp({ config, store, google }) {
       const refresh = result.tokens.refresh_token || previous?.refresh_token;
       if (!refresh) return res.status(400).send(page('Brak dostępu offline', `<p>Nie otrzymano refresh tokenu. Spróbuj ponownie udzielić zgody.</p><a href="${path(config, '/')}">Wróć</a>`));
       store.saveCredentials(user.id, { refresh_token: refresh, access_token: result.tokens.access_token, expiry_date: result.tokens.expiry_date }, result.scopes);
+      res.locals.logOutcome = `connected_${state.purpose}`;
       res.redirect(path(config, `/targets/${state.purpose}`));
     } catch { res.status(400).send(page('Nie udało się połączyć', `<p>Nie można zweryfikować odpowiedzi Google. Rozpocznij ponownie.</p><a href="${path(config, '/')}">Wróć</a>`)); }
   });
@@ -161,41 +172,43 @@ export function createApp({ config, store, google }) {
   app.use('/internal/v1', serviceAuth(config));
   app.get('/internal/v1/subscriptions', (req, res) => res.json({ subscriptions: store.activeSubscriptions(config.allowed) }));
   app.post('/internal/v1/publications', async (req, res) => {
+    const reply = (status, result) => { res.locals.logOutcome = result.status || result.error; return res.status(status).json(result); };
     const key = req.get('idempotency-key');
     const event = req.body;
-    if (!text(key, 200) || !event || typeof event.subscriptionId !== 'string') return res.status(400).json({ error: 'invalid_request' });
+    if (!text(key, 200) || !event || typeof event.subscriptionId !== 'string') return reply(400, { error: 'invalid_request' });
     const subscription = store.subscription(event.subscriptionId);
-    if (!subscription || !subscription.enabled) return res.status(404).json({ error: 'subscription_not_found' });
-    if (!validate(event, subscription.kind)) return res.status(400).json({ error: 'invalid_event' });
+    if (!subscription || !subscription.enabled) return reply(404, { error: 'subscription_not_found' });
+    if (['calendar', 'tasks'].includes(subscription.kind)) res.locals.logKind = subscription.kind;
+    if (!validate(event, subscription.kind)) return reply(400, { error: 'invalid_event' });
     const user = store.user(subscription.user_id);
-    if (!user || !config.allowed.includes(user.email.toLowerCase())) return res.status(404).json({ error: 'subscription_not_found' });
-    if (user.status !== 'connected' || !SCOPES[subscription.kind].every(s => JSON.parse(user.scopes).includes(s))) return res.status(409).json({ error: 'reauthorization_required' });
+    if (!user || !config.allowed.includes(user.email.toLowerCase())) return reply(404, { error: 'subscription_not_found' });
+    if (user.status !== 'connected' || !SCOPES[subscription.kind].every(s => JSON.parse(user.scopes).includes(s))) return reply(409, { error: 'reauthorization_required' });
     try { await google.access(user); } catch (error) {
-      if (error.message === 'reauthorization_required') return res.status(409).json({ error: 'reauthorization_required' });
-      return res.status(503).json({ error: 'google_unavailable' });
+      if (error.message === 'reauthorization_required') return reply(409, { error: 'reauthorization_required' });
+      return reply(503, { error: 'google_unavailable' });
     }
     const current = store.subscription(subscription.id);
     const currentUser = store.user(subscription.user_id);
-    if (!current || !current.enabled || currentUser?.status !== 'connected') return res.status(409).json({ error: 'subscription_unavailable' });
-    if (!SCOPES[subscription.kind].every(s => JSON.parse(currentUser.scopes).includes(s))) return res.status(409).json({ error: 'reauthorization_required' });
+    if (!current || !current.enabled || currentUser?.status !== 'connected') return reply(409, { error: 'subscription_unavailable' });
+    if (!SCOPES[subscription.kind].every(s => JSON.parse(currentUser.scopes).includes(s))) return reply(409, { error: 'reauthorization_required' });
     const payloadHash = hash(JSON.stringify(fields.map(f => event[f] ?? null)));
     const existing = store.publication(subscription.id, key);
     if (existing) {
-      if (existing.payload_hash !== payloadHash) return res.status(409).json({ error: 'idempotency_conflict' });
-      if (existing.status === 'created') return res.json({ status: 'already_exists', id: existing.google_id });
-      return res.status(409).json({ status: 'uncertain', message: 'Sprawdź wpis w Google przed kolejną próbą.' });
+      if (existing.payload_hash !== payloadHash) return reply(409, { error: 'idempotency_conflict' });
+      if (existing.status === 'created') return reply(200, { status: 'already_exists', id: existing.google_id });
+      return reply(409, { status: 'uncertain', message: 'Sprawdź wpis w Google przed kolejną próbą.' });
     }
-    if (store.publicationSource(subscription.id, event.sourceEventId)) return res.status(409).json({ error: 'source_already_recorded' });
+    if (store.publicationSource(subscription.id, event.sourceEventId)) return reply(409, { error: 'source_already_recorded' });
     store.reserve(subscription.id, key, event.sourceEventId, payloadHash);
     const id = createHash('sha256').update(`${subscription.id}\0${event.sourceEventId}`).digest('hex');
     try {
       const result = await google.publish(user, subscription, event, id);
       if (!result.id) throw Error('missing_id');
       store.complete(subscription.id, key, result.id);
-      res.status(201).json({ status: 'created', id: result.id });
+      reply(201, { status: 'created', id: result.id });
     } catch {
       store.uncertain(subscription.id, key);
-      res.status(409).json({ status: 'uncertain', message: 'Sprawdź wpis w Google przed kolejną próbą.' });
+      reply(409, { status: 'uncertain', message: 'Sprawdź wpis w Google przed kolejną próbą.' });
     }
   });
   app.use((err, req, res, next) => { if (res.headersSent) return next(err); res.status(err.status === 413 ? 413 : 500).json({ error: 'request_failed' }); });

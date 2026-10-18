@@ -45,6 +45,7 @@ Edytuj `.env`:
 - `GOOGLE_CLIENT_ID` — Client ID z Google Cloud.
 - `ALLOWED_EMAILS` — dozwolone adresy e-mail oddzielone przecinkami, np. `ALLOWED_EMAILS=anna@example.com,jan@example.com`. Spacje wokół adresów są usuwane, a wielkość liter nie ma znaczenia. Konta muszą też spełniać ustawienia Audience/Test users.
 - `BIND_ADDRESS` i `GATEWAY_PORT` — adres interfejsu hosta i port hosta, na którym ma być dostępne HTTP. Domyślnie `127.0.0.1:8765`, czyli dostęp tylko z tego VPS. `PORT=8765` wewnątrz kontenera jest stały.
+- `LOG_FILE` — ścieżka pliku logu wewnątrz kontenera (domyślnie `/data/gateway.log`). `LOG_MAX_BYTES` — maksymalny rozmiar pliku przed rotacją, domyślnie 10485760 bajtów; dopuszczalne są wartości od 1024 do 1073741824.
 
 Utwórz sekrety poza repozytorium. Nie wpisuj ich w poleceniach powłoki, repozytorium ani logach:
 
@@ -77,6 +78,18 @@ W swoim reverse proxy skonfiguruj trasę publicznego callbacku i panelu do portu
 Otwórz w przeglądarce publiczny adres panelu, np. `https://calendar.example.org/google-workspace/`. Zaloguj się, połącz Calendar i/lub Tasks, zaakceptuj zakresy oraz wybierz cel. Dostęp do panelu ma tylko konto Google z `ALLOWED_EMAILS`.
 
 Baza SQLite jest przechowywana w wolumenie Dockera `gateway_data`. Refresh tokeny są szyfrowane kluczem z `secrets/encryption_key`; rób bezpieczne kopie bazy i tego klucza razem. Utrata klucza uniemożliwi odczyt tokenów. Jedna instancja aplikacji powinna używać jednej bazy; odświeżanie tokenów nie jest synchronizowane pomiędzy replikami.
+
+## Log aplikacji
+
+Gateway zapisuje log do `/data/gateway.log` w kontenerze; katalog `/data` jest w trwałym wolumenie `gateway_data`, więc log pozostaje po odtworzeniu kontenera. `LOG_FILE` może wskazywać inną ścieżkę wewnątrz kontenera, ale tylko ścieżka w trwałym wolumenie zachowa log po jego usunięciu. Plik ma uprawnienia `0600` dla użytkownika aplikacji. Przykładowy podgląd domyślnego pliku:
+
+```sh
+docker compose exec gateway tail -f /data/gateway.log
+```
+
+Każda linia to osobny obiekt JSON z czasem UTC. Log obejmuje start serwera, żądania HTTP (nazwy znanych tras, metodę, kod odpowiedzi i czas), wyniki publikacji oraz wynik odświeżania tokenów Google. Nie zawiera nagłówków, ciastek, parametrów URL OAuth, tokenów, adresów e-mail, treści wydarzeń ani identyfikatorów subskrypcji. Nie jest szczegółowym rejestrem zdarzeń dla poszczególnych kont; oddzielna komenda `resolve.mjs` wypisuje wynik na konsolę. Narzędzia proxy i ich logi trzeba skonfigurować osobno.
+
+Przed przekroczeniem limitu bieżący plik jest przenoszony do `gateway.log.1` (lub `<LOG_FILE>.1`); zachowywana jest tylko jedna poprzednia kopia. Jeśli zapis się nie powiedzie, aplikacja zgłasza błąd na stderr, dostępny w `docker compose logs gateway`, i kontynuuje obsługę. Utworzenie pliku przy starcie jest wymagane do uruchomienia. Rotacja zakłada jedną instancję aplikacji zapisującą dany plik.
 
 ## Obraz i release na GitHubie
 
