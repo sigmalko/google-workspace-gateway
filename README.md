@@ -57,7 +57,7 @@ openssl rand -hex 32 > secrets/agent_token
 
 W edytorze utwórz `secrets/google_client_secret` i wklej sam Client secret. Sekrety powinny być czytelne dla użytkownika kontenera (`1000:1000`) i niedostępne dla innych użytkowników hosta. `agent_token` to osobny sekret dla agenta, nie Google token.
 
-Jeśli uruchamiasz checkout ze źródeł, zbuduj obraz lokalnie. Przy instalacji z GitLab Release plik `.env.example` wskazuje już wersjonowany obraz w registry i ten krok pomiń.
+Jeśli uruchamiasz checkout ze źródeł, zbuduj obraz lokalnie. Przy instalacji z release plik `.env.example` wskazuje już wersjonowany obraz w registry i ten krok pomiń.
 
 ```sh
 docker build -t google-workspace-gateway:local .
@@ -78,7 +78,13 @@ Otwórz w przeglądarce publiczny adres panelu, np. `https://calendar.example.or
 
 Baza SQLite jest przechowywana w wolumenie Dockera `gateway_data`. Refresh tokeny są szyfrowane kluczem z `secrets/encryption_key`; rób bezpieczne kopie bazy i tego klucza razem. Utrata klucza uniemożliwi odczyt tokenów. Jedna instancja aplikacji powinna używać jednej bazy; odświeżanie tokenów nie jest synchronizowane pomiędzy replikami.
 
-## Instalacja z GitLab Release
+## Obraz i release na GitHubie
+
+GitHub Actions uruchamia testy dla pull requestów, pushy na `main` i tagów `v*`. Po udanych testach push na `main` publikuje obraz `ghcr.io/sigmalko/google-workspace-gateway:latest` oraz tag `sha-<pełny SHA>` dla `linux/amd64` i `linux/arm64`. Tag `vMAJOR.MINOR.PATCH` musi wskazywać commit z historii `main`; publikuje obraz z tagiem bez `v` oraz tworzy GitHub Release. Workflow można także uruchomić ręcznie z karty Actions na gałęzi `main`.
+
+Aby wydać wersję, wypchnij nowy tag, np. `git tag v0.1.0` i `git push origin v0.1.0`. Release zawiera opis instalacji oraz trzy pliki: `docker-compose.yml`, `env.example` (GitHub usuwa początkową kropkę z nazw assetów) i `README.md`. W `env.example` jest ustawiony obraz przypięty do danej wersji. Pobierz te pliki z konkretnego release, zmień nazwę `env.example` na `.env` i skonfiguruj go oraz pliki sekretów według sekcji instalacji. Następnie uruchom `docker compose pull` i `docker compose up -d`. Jeśli pakiet GHCR jest prywatny, zaloguj Dockera do GHCR albo zmień widoczność pakietu; samo publiczne repozytorium nie gwarantuje publicznej widoczności obrazu.
+
+## Alternatywny pipeline GitLab
 
 Repozytorium źródłowe jest na GitHubie. Plik `.gitlab-ci.yml` uruchomi się dopiero po zaimportowaniu repozytorium do GitLaba lub skonfigurowaniu projektu/mirrora GitLab, który uruchamia pipeline dla commitów i tagów. W GitLab włącz Container Registry i Package Registry. Pipeline wymaga runnera Docker-in-Docker z obsługą TLS oraz trybem `privileged`; tokeny registry i CI `CI_JOB_TOKEN` są używane automatycznie, nie dodawaj własnego tokenu do zmiennych. Przy DinD runner musi współdzielić katalog certyfikatów klienta `/certs/client` z jobem.
 
