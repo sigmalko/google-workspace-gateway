@@ -33,12 +33,12 @@ Google kieruje przeglądarkę na skonfigurowany `OAUTH_REDIRECT_URL`, np. `https
 
 ## Instalacja i uruchomienie
 
-Pobierz `docker-compose.yml` i `env.example` z tego samego [GitHub Release](https://github.com/sigmalko/google-workspace-gateway/releases). Poniższy przykład instaluje wersję `v0.1.2`; aby wybrać inną wersję, zmień `RELEASE`. Nie trzeba klonować repozytorium ani budować obrazu.
+Pobierz `docker-compose.yml` i `env.example` z tego samego [GitHub Release](https://github.com/sigmalko/google-workspace-gateway/releases). Poniższy przykład instaluje wersję `v0.1.3`; aby wybrać inną wersję, zmień `RELEASE`. Nie trzeba klonować repozytorium ani budować obrazu.
 
 ```sh
 mkdir -p google-workspace-gateway
 cd google-workspace-gateway
-RELEASE=v0.1.2
+RELEASE=v0.1.3
 RELEASE_URL="https://github.com/sigmalko/google-workspace-gateway/releases/download/${RELEASE}"
 curl -fL "$RELEASE_URL/docker-compose.yml" -o docker-compose.yml
 curl -fL "$RELEASE_URL/env.example" -o .env.example
@@ -47,7 +47,7 @@ cp .env.example .env
 
 Podane polecenia są przeznaczone do pierwszej instalacji w nowym katalogu: `cp` zastąpi istniejący plik `.env`. Przy aktualizacji zachowaj swoją konfigurację i sekrety, pobierz pliki nowej wersji oraz ustaw w istniejącym `.env` wartość `GATEWAY_IMAGE` z nowego `.env.example`.
 
-Edytuj `.env`:
+Edytuj `.env`. Każdy parametr jest również opisany w komentarzach pliku, wraz z informacją, skąd wziąć lub jak wybrać jego wartość:
 
 - `OAUTH_REDIRECT_URL` — pełny, publiczny callback HTTPS z dokładną ścieżką, którą zarejestrujesz w Google. Prefiks może być dowolny, np. `/google-workspace`; sama aplikacja wymaga końcówki `/oauth/google/callback`.
 - `GATEWAY_IMAGE` — adres obrazu GHCR przypiętego do wybranego wydania; wartość jest przygotowana w pobranym `env.example`.
