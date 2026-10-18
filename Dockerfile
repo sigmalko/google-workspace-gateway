@@ -4,7 +4,10 @@ ARG IMAGE_REVISION=unknown
 ENV NODE_ENV=production
 LABEL org.opencontainers.image.title="Google Workspace Gateway" \
       org.opencontainers.image.description="OAuth gateway for Google Calendar and Google Tasks" \
+      org.opencontainers.image.url="https://github.com/sigmalko/google-workspace-gateway" \
+      org.opencontainers.image.documentation="https://github.com/sigmalko/google-workspace-gateway#readme" \
       org.opencontainers.image.source="https://github.com/sigmalko/google-workspace-gateway" \
+      org.opencontainers.image.vendor="sigmalko" \
       org.opencontainers.image.version=$IMAGE_VERSION \
       org.opencontainers.image.revision=$IMAGE_REVISION
 WORKDIR /app
